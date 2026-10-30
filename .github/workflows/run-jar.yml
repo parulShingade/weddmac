@@ -1,0 +1,84 @@
+name: Run JAR Application
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Duration (in seconds) to keep the app running before finishing'
+        required: false
+        default: '15'
+
+jobs:
+  run-jar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Check JAR file
+        run: |
+          echo "Checking JAR file existence and size:"
+          ls -lh demo-0.0.1-SNAPSHOT.jar
+
+      - name: Run Spring Boot JAR and Verify
+        run: |
+          echo "Starting demo-0.0.1-SNAPSHOT.jar..."
+          java -jar demo-0.0.1-SNAPSHOT.jar > app.log 2>&1 &
+          APP_PID=$!
+          echo "Process started with PID: $APP_PID"
+
+          echo "Waiting for Spring Boot to start..."
+          TIMEOUT=60
+          STARTED=0
+          for i in $(seq 1 $TIMEOUT); do
+            if grep -q "Started DemoApplication" app.log 2>/dev/null; then
+              echo ">>> Application started successfully in $i seconds! <<<"
+              STARTED=1
+              break
+            fi
+            if ! kill -0 $APP_PID 2>/dev/null; then
+              echo "Error: Application process exited unexpectedly."
+              break
+            fi
+            sleep 1
+          done
+
+          echo "==================== APPLICATION LOGS ===================="
+          cat app.log
+          echo "=========================================================="
+
+          if [ $STARTED -ne 1 ]; then
+            echo "Application failed to start within $TIMEOUT seconds."
+            exit 1
+          fi
+
+          DURATION="${{ github.event.inputs.duration_seconds || '15' }}"
+          echo "Keeping application running for $DURATION seconds..."
+          sleep "$DURATION"
+
+          echo "Pinging server on port 8080..."
+          curl -I -s http://localhost:8080 || true
+
+          echo "Shutting down application cleanly..."
+          kill "$APP_PID"
+          wait "$APP_PID" 2>/dev/null || true
+          echo "Execution completed successfully!"
+
+      - name: Upload Application Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-logs
+          path: app.log
+          if-no-files-found: ignore
